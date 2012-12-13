@@ -28,11 +28,11 @@ requires:
 Install
 =======
 
-cd lib
-make
-sudo make install
-cd ..
-python setup.py build_ext --inplace
+    cd lib
+    make
+    sudo make install
+    cd ..
+    python setup.py build_ext --inplace
 
 Usage
 =====
