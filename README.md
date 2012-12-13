@@ -32,8 +32,8 @@ Install
 
     cd lib
     make
+    (on OSX do:  sudo make -f Makefile.osx)
     sudo make install
-    (on OSX do:  sudo make -f Makefile.osx install)
     cd ..
     python setup.py build_ext --inplace
 
