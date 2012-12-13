@@ -43,7 +43,7 @@ Usage
 
     import mdb
 
-    env = mdb.Env('/tmp/crack', max_dbs=5)
+    env = mdb.Env('/tmp/mdbtest', max_dbs=5)
     txn = env.begin_txn()
     db = env.open_db(txn)
     db.put(txn, 'hi', 'assinine')
