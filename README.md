@@ -37,18 +37,18 @@ python setup.py build_ext --inplace
 Usage
 =====
 
-import mdb
+    import mdb
 
-env = mdb.Env('/tmp/crack', max_dbs=5)
-txn = env.begin_txn()
-db = env.open_db(txn)
-db.put(txn, 'hi', 'assinine')
-txn.commit()
-txn = env.begin_txn()
-print '"%s"' % db.get(txn, 'hi')  # --> assinine
-txn.close()
-db.close()
-env.close()
+    env = mdb.Env('/tmp/crack', max_dbs=5)
+    txn = env.begin_txn()
+    db = env.open_db(txn)
+    db.put(txn, 'hi', 'assinine')
+    txn.commit()
+    txn = env.begin_txn()
+    print '"%s"' % db.get(txn, 'hi')  # --> assinine
+    txn.close()
+    db.close()
+    env.close()
 
 
 
