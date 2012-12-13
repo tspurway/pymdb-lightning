@@ -230,20 +230,6 @@ cdef class DB:
                 break
         cursor.close()
 
-    def burst(self, Txn txn, iter, delete_first=False):
-        """burst data into the database"""
-        cursor = Cursor(txn, self)
-        if delete_first:
-            while True:
-                key, _ = cursor.get()
-                if key:
-                    cursor.delete()
-                else:
-                    break
-
-        for key, value in iter:
-            cursor.put(key, value, MDB_APPEND)
-
 cdef class Cursor:
     cdef cmdb.MDB_cursor *cursor
 
