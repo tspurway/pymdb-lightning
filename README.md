@@ -21,7 +21,7 @@ It's tiny.  It compiles to a library < 32K in size.
 
 Unfortunately, the C source for MDB is buried deep inside OpenLDAP.  I have copied the latest source into the lib/ directory, and will resync occasionally.
 
-I have tested the software on OS/X - THIS IS PRE-ALPHA software!  Use at your own risk.
+I have (barely) tested the software on OS/X - THIS IS PRE-ALPHA software!  Use at your own risk.
 
 requires:
  - Python 2.7 (that is all I have tested with)
