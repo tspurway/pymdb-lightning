@@ -36,6 +36,7 @@ Install
     sudo make install
     cd ..
     python setup.py build_ext --inplace
+    (bravely install to your system with: sudo python setup.py build_ext install)
 
 Usage
 =====
