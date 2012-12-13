@@ -5,7 +5,7 @@ Python interface to OpenLDAP MDB (aka. lightning db) key/value store.
 
 Official Symas MDB Site:  http://www.symas.com/mdb/
 
-The MDB database is a memory mapped (mmap) based b+ tree based key/value store.
+The MDB database is a memory mapped (mmap) based b+ tree key/value store.
 
 It uses MVCC, which allows for lockless read/writes - which is very useful in a process heavy Python system.
 
@@ -16,6 +16,8 @@ It allows for mutliple database instances per mmap, which is a nice touch.
 It's got an excellent and very rich API (duplicate key b+ trees, read/write/del cursors, burst writes, etc).
 
 It is fast.  I compares very favourably to kyotocabinet (faster than KCH in my application).
+
+It's tiny.  It compiles to a library < 32K in size.
 
 Unfortunately, the C source for MDB is buried deep inside OpenLDAP.  I have copied the latest source into the lib/ directory, and will resync occasionally.
 
