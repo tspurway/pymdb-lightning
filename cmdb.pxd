@@ -8,19 +8,19 @@ cdef extern from './lib/lmdb.h':
     ctypedef struct MDB_cursor:
         pass
 
-    ctypedef unsigned int	MDB_dbi
+    ctypedef unsigned int    MDB_dbi
 
     ctypedef struct MDB_val:
         size_t   mv_size
         void    *mv_data
 
     ctypedef   struct MDB_stat:
-        unsigned int	ms_psize
-        unsigned int	ms_depth
-        size_t		    ms_branch_pages
-        size_t		    ms_leaf_pages
-        size_t		    ms_overflow_pages
-        size_t		    ms_entries
+        unsigned int    ms_psize
+        unsigned int    ms_depth
+        size_t          ms_branch_pages
+        size_t          ms_leaf_pages
+        size_t          ms_overflow_pages
+        size_t          ms_entries
 
     ctypedef struct MDB_envinfo:
         void            *me_mapaddr

@@ -49,6 +49,12 @@ MDB_SET = 15
 MDB_SET_KEY = 16
 MDB_SET_RANGE = 17
 
+# constants for byte sizes
+KB = 1024
+MB = 1000 * KB
+GB = 1000 * MB
+TB = 1000 * GB
+
 
 cdef class Txn:
     cdef cmdb.MDB_txn *txn
