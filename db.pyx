@@ -80,7 +80,7 @@ cdef class Txn:
 cdef class Env:
     cdef cmdb.MDB_env *env
 
-    def __init__(self, char *filename, int flags=MDB_FIXEDMAP, int permissions=0664,
+    def __init__(self, char *filename, int flags=0, int permissions=0664,
                  int mapsize=0, int max_dbs=0, int max_readers=0):
         err = cmdb.mdb_env_create(&self.env)
         if err:
