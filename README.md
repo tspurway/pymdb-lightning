@@ -4,6 +4,7 @@ pymdb-lightning
 Python interface to OpenLDAP MDB (aka. lightning db) key/value store.
 
 Official Symas MDB Site:  http://www.symas.com/mdb/
+MDB git repo:
 
 The MDB database is a memory mapped (mmap) based b+ tree key/value store.
 
@@ -19,22 +20,23 @@ It is fast.  I compares very favourably to kyotocabinet (faster than KCH in my a
 
 It's tiny.  It compiles to a library < 32K in size.
 
-Unfortunately, the C source for MDB is buried deep inside OpenLDAP.  I have copied the latest source into the lib/ directory, and will resync occasionally.
 
-I have (barely) tested the software on OS/X - THIS IS PRE-ALPHA software!  Use at your own risk.
 
 requires:
+ - mdb
  - Python 2.7 (that is all I have tested with)
  - compatibly versioned Cython
 
 Install
 =======
 
-    cd lib
+    (in your src directory)
+    git clone https://github.com/tspurway/pymdb-lightning.git
+    git clone https://git.gitorious.org/mdb/mdb.git
+    cd mdb/libraries/liblmdb/
     make
-    (on OSX do:  make -f Makefile.osx)
     sudo make install
-    cd ..
+    cd ../../../pymdb-lightning
     python setup.py build_ext --inplace
     (bravely install to your system with: sudo python setup.py build_ext install)
 
