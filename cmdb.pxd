@@ -1,4 +1,4 @@
-cdef extern from './lib/lmdb.h':
+cdef extern from 'lmdb.h':
     ctypedef struct MDB_txn:
         pass
 
