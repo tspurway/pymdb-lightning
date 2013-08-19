@@ -22,7 +22,8 @@ It's tiny.  It compiles to a library < 32K in size.
 
 
 
-requires:
+Requires:
+=======
  - mdb
  - Python 2.7 (that is all I have tested with)
  - compatibly versioned Cython
@@ -33,28 +34,45 @@ Install
     (in your src directory)
     git clone https://github.com/tspurway/pymdb-lightning.git
     git clone https://git.gitorious.org/mdb/mdb.git
+    
     cd mdb/libraries/liblmdb/
     make
     sudo make install
+    
     cd ../../../pymdb-lightning
     python setup.py build_ext --inplace
-    (bravely install to your system with: sudo python setup.py build_ext install)
+    (bravely install to your system with: sudo python setup.py install)
 
 Usage
 =====
 
-    import mdb
+Using Writer and Reader
+-----------------------
 
-    env = mdb.Env('/tmp/mdbtest', max_dbs=5)
-    txn = env.begin_txn()
-    db = env.open_db(txn)
-    db.put(txn, 'hi', 'assinine')
-    txn.commit()
-    txn = env.begin_txn()
-    print '"%s"' % db.get(txn, 'hi')  # --> assinine
-    txn.close()
-    db.close()
-    env.close()
+    `>>>import mdb`
+    `>>>writer = mdb.Writer('/tmp/mdbtest')`
+    `>>>writer.put('foo', 'bar')`
+    `>>>writer.mput({"key": "value", "egg": "spam"})`
+    `>>>reader = mdb.Reader('/tmp/mdbtest')`
+    `>>>reader.get('foo')`
+    `>>>for key, value in reader.iteritems():`
+    `...  print key, value`
+    
+Using Low-level MDB
+-------------------
+    `>>>env = mdb.Env('/tmp/mdbtest')`
+    `>>>txn = env.begin_txn()`
+    `>>>db = env.open_db(txn)`
+    `>>>db.put(txn, 'hi', 'assinine')`
+    `>>>txn.commit()`
+    `>>>txn = env.begin_txn()`
+    `>>>print '"%s"' % db.get(txn, 'hi')  # --> assinine`
+    `>>>txn.close()`
+    `>>>db.close()`
+    `>>>.env.close()`
 
-
-
+RELEASE NOTES:
+0.2.5
+    * Added Reader and Writer abstractions
+    * Added IntDB / IntCursor for integer keys
+    *

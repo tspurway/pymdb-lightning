@@ -1,4 +1,75 @@
 cdef extern from 'lmdb.h':
+    cdef enum:
+        # env creation flags
+        MDB_FIXEDMAP = 0x01
+        MDB_NOSUBDIR = 0x4000
+        MDB_NOSYNC = 0x10000
+        MDB_RDONLY = 0x20000
+        MDB_NOMETASYNC = 0x40000
+        MDB_WRITEMAP = 0x80000
+        MDB_MAPASYNC = 0x100000
+        MDB_NOTLS = 0x200000
+
+        # db open flags
+        MDB_REVERSEKEY = 0x02
+        MDB_DUPSORT = 0x04
+        MDB_INTEGERKEY = 0x08
+        MDB_DUPFIXED = 0x10
+        MDB_INTEGERDUP = 0x20
+        MDB_REVERSEDUP = 0x40
+        MDB_CREATE = 0x40000
+
+        # write flags
+        MDB_NOOVERWRITE = 0x10
+        MDB_NODUPDATA = 0x20
+        MDB_CURRENT = 0x40
+        MDB_RESERVE = 0x10000
+        MDB_APPEND = 0x20000
+        MDB_APPENDDUP = 0x40000
+        MDB_MULTIPLE = 0x80000
+
+        # MDB Return Values
+        MDB_SUCCESS	= 0
+        MDB_KEYEXIST = -30799
+        MDB_NOTFOUND = -30798
+        MDB_PAGE_NOTFOUND = -30797
+        MDB_CORRUPTED = -30796
+        MDB_PANIC = -30795
+        MDB_VERSION_MISMATCH = -30794
+        MDB_INVALID = -30793
+        MDB_MAP_FULL = -30792
+        MDB_DBS_FULL = -30791
+        MDB_READERS_FULL = -30790
+        MDB_TLS_FULL = -30789
+        MDB_TXN_FULL = -30788
+        MDB_CURSOR_FULL = -30787
+        MDB_PAGE_FULL = -30786
+        MDB_MAP_RESIZED = -30785
+        MDB_INCOMPATIBLE = -30784
+        MDB_BAD_RSLOT = -30783
+        MDB_LAST_ERRCODE = MDB_BAD_RSLOT
+
+    cdef enum Cursor_Op:
+        # cursor operations
+        MDB_FIRST = 0
+        MDB_FIRST_DUP = 1
+        MDB_GET_BOTH = 2
+        MDB_GET_BOTH_RANGE = 3
+        MDB_GET_CURRENT = 4
+        MDB_GET_MULTIPLE = 5
+        MDB_LAST = 6
+        MDB_LAST_DUP = 7
+        MDB_NEXT = 8
+        MDB_NEXT_DUP = 9
+        MDB_NEXT_MULTIPLE = 10
+        MDB_NEXT_NODUP = 11
+        MDB_PREV = 12
+        MDB_PREV_DUP = 13
+        MDB_PREV_NODUP = 14
+        MDB_SET = 15
+        MDB_SET_KEY = 16
+        MDB_SET_RANGE = 17
+
     ctypedef struct MDB_txn:
         pass
 
@@ -50,6 +121,8 @@ cdef extern from 'lmdb.h':
     int  mdb_txn_begin(MDB_env *env, MDB_txn *parent, unsigned int flags, MDB_txn **txn)
     int  mdb_txn_commit(MDB_txn *txn)
     void mdb_txn_abort(MDB_txn *txn)
+    void mdb_txn_reset(MDB_txn *txn)
+    int  mdb_txn_renew(MDB_txn *txn)
 
     int  mdb_dbi_open(MDB_txn *txn, char *name, unsigned int flags, MDB_dbi *dbi)
     void mdb_dbi_close(MDB_env *env, MDB_dbi dbi)
@@ -62,8 +135,7 @@ cdef extern from 'lmdb.h':
     int  mdb_cursor_open(MDB_txn *txn, MDB_dbi dbi, MDB_cursor **cursor)
     void mdb_cursor_close(MDB_cursor *cursor)
     int  mdb_cursor_renew(MDB_txn *txn, MDB_cursor *cursor)
-    int  mdb_cursor_get(MDB_cursor *cursor, MDB_val *key, MDB_val *data, int op)
+    int  mdb_cursor_get(MDB_cursor *cursor, MDB_val *key, MDB_val *data, unsigned int op)
     int  mdb_cursor_put(MDB_cursor *cursor, MDB_val *key, MDB_val *data, unsigned int flags)
     int  mdb_cursor_del(MDB_cursor *cursor, unsigned int flags)
     int  mdb_cursor_count(MDB_cursor *cursor, size_t *countp)
-
