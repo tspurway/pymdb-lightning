@@ -2,7 +2,7 @@ from distutils.core import setup
 from distutils.extension import Extension
 from Cython.Distutils import build_ext
 
-__version__ = '0.2.5'
+__version__ = '0.2.6'
 
 setup(
     name = "mdb",
