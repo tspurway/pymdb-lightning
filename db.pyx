@@ -139,6 +139,12 @@ cdef class Env:
             raise Exception("Error opening environment: %s"
                             % cmdb.mdb_strerror(err))
 
+    def set_mapsize(self, size_t mapsize):
+        err = cmdb.mdb_env_set_mapsize(self.env, mapsize)
+        if err:
+            raise Exception("Could not set environment size, make sure all\
+                            txns have been closed: %s" % cmdb.mdb_strerror(err))
+
     def close(self):
         cmdb.mdb_env_close(self.env)
 
@@ -208,9 +214,15 @@ cdef class Env:
         cdef DB db
 
         if flags & MDB_INTEGERKEY:
-            db = IntDB(self, txn, name, flags)
+            if flags & MDB_INTEGERDUP:
+                db = IntIntDB(self, txn, name, flags)
+            else:
+                db = IntStrDB(self, txn, name, flags)
         else:
-            db = DB(self, txn, name, flags)
+            if flags & MDB_INTEGERDUP:
+                db = StrIntDB(self, txn, name, flags)
+            else:
+                db = DB(self, txn, name, flags)
         return db
 
 
@@ -337,18 +349,16 @@ cdef class DB:
         '''
         cdef Cursor cursor
 
-        last_key = None
-        cursor = Cursor(txn, self)
-        while True:
-            key, value = cursor.get(op=MDB_NEXT)
-            if key is not None and value is not None:
-                last_key = key
-                yield key, value
-            elif key is None and value is not None:
-                yield last_key, value
-            else:
-                break
-        cursor.close()
+        try:
+            cursor = Cursor(txn, self)
+            while True:
+                key, value = cursor.get(op=MDB_NEXT)
+                if key is not None and value is not None:
+                    yield key, value
+                else:
+                    break
+        finally:
+            cursor.close()
 
     def get_dup(self, Txn txn, key):
         cdef cmdb.MDB_val api_key
@@ -384,13 +394,167 @@ cdef class DB:
             if key != key_:
                 yield key, value
 
-cdef class IntDB(DB):
+
+cdef class StrIntDB(DB):
+    def __init__(self, Env env, Txn txn, name=None,
+                 unsigned int flags=MDB_DUPSORT | MDB_CREATE):
+        flags |= (MDB_DUPSORT | MDB_INTEGERDUP | MDB_DUPFIXED)
+        super(StrIntDB, self).__init__(env, txn, name, flags)
+
+    def get(self, Txn txn, key):
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef size_t key_len
+
+        key_len = len(key) + 1
+        api_key.mv_size = key_len
+        api_key.mv_data = <char*>key
+
+        err = cmdb.mdb_get(txn.txn, self.dbi, &api_key, &api_value)
+        if err == cmdb.MDB_NOTFOUND:
+            raise KeyNotFoundError("Error getting data: %s"
+                                   % cmdb.mdb_strerror(err))
+        elif err:
+            raise Exception("Error getting data: %s" % cmdb.mdb_strerror(err))
+        return  (<long *>api_value.mv_data)[0]
+
+    def put(self, Txn txn, key, long value, unsigned int flags=0):
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef size_t key_len = len(key)
+        cdef size_t value_len = sizeof(long)
+
+        api_key.mv_size = key_len + 1
+        api_key.mv_data = <char*>key
+        api_value.mv_size = value_len
+        api_value.mv_data = <void *>&value
+
+        err = cmdb.mdb_put(txn.txn, self.dbi, &api_key, &api_value, flags)
+        if err == cmdb.MDB_MAP_FULL:
+            raise MapFullError("Error putting data: %s"
+                               % cmdb.mdb_strerror(err))
+        elif err == cmdb.MDB_TXN_FULL:
+            raise TxnFullError("Error putting data: %s"
+                               % cmdb.mdb_strerror(err))
+        elif err == cmdb.MDB_KEYEXIST:
+            raise KeyExistError("Error putting data: %s"
+                                % cmdb.mdb_strerror(err))
+        elif err:
+            raise Exception("Error putting data: %s" % cmdb.mdb_strerror(err))
+
+    def delete(self, Txn txn, key, value=None):
+        """Delete key/value from MDB
+
+        If value is not specified, delete all values with this key. Otherwise,
+        delete the specified key/value.
+        """
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef long value_
+
+        api_key.mv_size = len(key) + 1
+        api_key.mv_data = <char*>key
+        if value:
+            value_ = value
+            api_value.mv_size = sizeof(long)
+            api_value.mv_data = <void *>&value_
+            err = cmdb.mdb_del(txn.txn, self.dbi, &api_key, &api_value)
+            if err:
+                raise Exception("Error deleting data: %s"
+                                % cmdb.mdb_strerror(err))
+        else:
+            err = cmdb.mdb_del(txn.txn, self.dbi, &api_key, NULL)
+            if err:
+                raise Exception("Error deleting data: %s"
+                                % cmdb.mdb_strerror(err))
+
+    def items(self, Txn txn):
+        '''Return all the unique key values
+        '''
+        cdef cmdb.MDB_cursor *cursor
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef char *key_
+        cdef long value_
+
+        err = cmdb.mdb_cursor_open(txn.txn, self.dbi, &cursor)
+        if err:
+            raise Exception("Error creating Cursor: %s"
+                    % cmdb.mdb_strerror(err))
+        api_key.mv_size = 0
+        api_key.mv_data = NULL
+        api_value.mv_size = sizeof(long)
+        api_value.mv_data =  NULL
+
+        try:
+            while not cmdb.mdb_cursor_get(cursor, &api_key,
+                                          &api_value, MDB_NEXT_NODUP):
+                key_ = <char *>api_key.mv_data
+                value_ = (<long *>api_value.mv_data)[0]
+                yield key_[:api_value.mv_size-1], value_
+        finally:
+            cmdb.mdb_cursor_close(cursor)
+
+    def dup_items(self, Txn txn):
+        '''Return all the key values
+        '''
+        cdef cmdb.MDB_cursor *cursor
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef long value_
+        cdef char *key_
+
+        err = cmdb.mdb_cursor_open(txn.txn, self.dbi, &cursor)
+        if err:
+            raise Exception("Error creating Cursor: %s"
+                    % cmdb.mdb_strerror(err))
+        api_key.mv_size = 0
+        api_key.mv_data = NULL
+        api_value.mv_size =  sizeof(long)
+        api_value.mv_data =  NULL
+
+        try:
+            while not cmdb.mdb_cursor_get(cursor, &api_key,
+                                          &api_value, MDB_NEXT):
+                key_ = <char *>api_key.mv_data
+                value_ = (<long *>api_value.mv_data)[0]
+                yield key_, value_
+        finally:
+            cmdb.mdb_cursor_close(cursor)
+
+    def get_dup(self, Txn txn, key):
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef long value_
+
+        api_key.mv_size = len(key) + 1
+        api_key.mv_data = <char *>key
+
+        cdef cmdb.MDB_cursor *cursor
+        err = cmdb.mdb_cursor_open(txn.txn, self.dbi, &cursor)
+        if err:
+            raise Exception("Error creating cursor: %s"
+                            % cmdb.mdb_strerror(err))
+        if not cmdb.mdb_cursor_get(cursor, &api_key, &api_value, MDB_SET):
+            value_ = (<long *>api_value.mv_data)[0]
+            yield value_
+            while True:
+                if not cmdb.mdb_cursor_get(cursor, &api_key,
+                                           &api_value, MDB_NEXT_DUP):
+                    value_ = (<long *>api_value.mv_data)[0]
+                    yield value_
+                else:
+                    break
+        cmdb.mdb_cursor_close(cursor)
+
+
+cdef class IntStrDB(DB):
     def __init__(self, Env env, Txn txn, name=None,
                  unsigned int flags=MDB_DUPSORT | MDB_CREATE):
         flags |= MDB_INTEGERKEY
-        super(IntDB, self).__init__(env, txn, name, flags)
+        super(IntStrDB, self).__init__(env, txn, name, flags)
 
-    def get(self, Txn txn, key):
+    def get(self, Txn txn, long key):
         cdef cmdb.MDB_val api_key
         cdef cmdb.MDB_val api_value
         cdef long ikey
@@ -408,7 +572,7 @@ cdef class IntDB(DB):
         cdef char *rval = <char*>api_value.mv_data
         return rval[:api_value.mv_size-1]
 
-    def put(self, Txn txn, key, value, unsigned int flags=0):
+    def put(self, Txn txn, long key, value, unsigned int flags=0):
         cdef cmdb.MDB_val api_key
         cdef cmdb.MDB_val api_value
         cdef size_t value_len = len(value)
@@ -434,7 +598,7 @@ cdef class IntDB(DB):
             raise Exception("Error putting data: %s" % cmdb.mdb_strerror(err))
 
 
-    def delete(self, Txn txn, key, value=None):
+    def delete(self, Txn txn, long key, value=None):
         """Delete key/value from MDB
 
         If value is not specified, delete all values with this key. Otherwise,
@@ -463,121 +627,410 @@ cdef class IntDB(DB):
     def items(self, Txn txn):
         '''Return all the unique key values
         '''
-        cdef IntCursor cursor
+        cdef cmdb.MDB_cursor *cursor
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef char *value_
+        cdef long key_
 
-        cursor = IntCursor(txn, self)
-        while True:
-            key, value = cursor.get(op=MDB_NEXT_NODUP)
-            if key is not None:
-                yield key, value
-            else:
-                break
-        cursor.close()
+        err = cmdb.mdb_cursor_open(txn.txn, self.dbi, &cursor)
+        if err:
+            raise Exception("Error creating Cursor: %s"
+                    % cmdb.mdb_strerror(err))
+        api_key.mv_size = sizeof(long)
+        api_key.mv_data = <void*>&key_
+        api_value.mv_size = 0
+        api_value.mv_data = NULL
+
+        try:
+            while not cmdb.mdb_cursor_get(cursor, &api_key,
+                                          &api_value, MDB_NEXT_NODUP):
+                value_ = <char*>api_value.mv_data
+                key_ = (<long*>api_key.mv_data)[0]
+                yield key_, value_[:api_value.mv_size-1]
+        finally:
+            cmdb.mdb_cursor_close(cursor)
 
     def dup_items(self, Txn txn):
         '''Return all the key values
         '''
-        cdef IntCursor cursor
+        cdef cmdb.MDB_cursor *cursor
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef char *value_
+        cdef long key_
 
-        last_key = None
-        cursor = IntCursor(txn, self)
-        while True:
-            key, value = cursor.get(op=MDB_NEXT)
-            if key is not None and value is not None:
-                last_key = key
-                yield key, value
-            elif key is None and value is not None:
-                yield last_key, value
-            else:
-                break
-        cursor.close()
+        err = cmdb.mdb_cursor_open(txn.txn, self.dbi, &cursor)
+        if err:
+            raise Exception("Error creating Cursor: %s"
+                    % cmdb.mdb_strerror(err))
+        api_key.mv_size = sizeof(long)
+        api_key.mv_data = <void*>&key_
+        api_value.mv_size = 0
+        api_value.mv_data = NULL
 
-    def get_dup(self, Txn txn, key):
+        try:
+            while not cmdb.mdb_cursor_get(cursor, &api_key,
+                                          &api_value, MDB_NEXT):
+                value_ = <char*>api_value.mv_data
+                key_ = (<long*>api_key.mv_data)[0]
+                yield key_, value_[:api_value.mv_size-1]
+        finally:
+            cmdb.mdb_cursor_close(cursor)
+
+    def get_dup(self, Txn txn, long key):
         cdef cmdb.MDB_val api_key
         cdef cmdb.MDB_val api_value
         cdef char *value_
         cdef long ikey
+        cdef cmdb.MDB_cursor *cursor
 
+        err = cmdb.mdb_cursor_open(txn.txn, self.dbi, &cursor)
+        if err:
+            raise Exception("Error creating cursor: %s"
+                    % cmdb.mdb_strerror(err))
         ikey = key
         api_key.mv_size = sizeof(long)
         api_key.mv_data = <void *>&ikey
 
+        try:
+            if not cmdb.mdb_cursor_get(cursor, &api_key, &api_value, MDB_SET):
+                value_ = <char*>api_value.mv_data
+                yield value_[:api_value.mv_size-1]
+                while True:
+                    if not cmdb.mdb_cursor_get(cursor, &api_key,
+                                            &api_value, MDB_NEXT_DUP):
+                        value_ = <char*>api_value.mv_data
+                        yield value_[:api_value.mv_size-1]
+                    else:
+                        break
+        finally:
+            cmdb.mdb_cursor_close(cursor)
+
+    def get_lt(self, Txn txn, long key):
         cdef cmdb.MDB_cursor *cursor
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef char *value_
+        cdef long key_
+
         err = cmdb.mdb_cursor_open(txn.txn, self.dbi, &cursor)
         if err:
-            raise Exception("Error creating cursor: %s"
-                            % cmdb.mdb_strerror(err))
-        if not cmdb.mdb_cursor_get(cursor, &api_key, &api_value, MDB_SET):
-            value_ = <char*>api_value.mv_data
-            yield value_[:api_value.mv_size-1]
-            while True:
-                if not cmdb.mdb_cursor_get(cursor, &api_key,
-                                           &api_value, MDB_NEXT_DUP):
-                    value_ = <char*>api_value.mv_data
-                    yield value_[:api_value.mv_size-1]
+            raise Exception("Error creating Cursor: %s"
+                    % cmdb.mdb_strerror(err))
+        api_key.mv_size = sizeof(long)
+        api_key.mv_data = <void*>&key_
+        api_value.mv_size = 0
+        api_value.mv_data = NULL
+
+        try:
+            while not cmdb.mdb_cursor_get(cursor, &api_key,
+                                          &api_value, MDB_NEXT):
+                value_ = <char*>api_value.mv_data
+                key_ = (<long*>api_key.mv_data)[0]
+                if key_ < key:
+                    yield key_, value_[:api_value.mv_size-1]
                 else:
                     break
-        cmdb.mdb_cursor_close(cursor)
+        finally:
+            cmdb.mdb_cursor_close(cursor)
 
-    def get_lt(self, Txn txn, key_):
-        cdef IntCursor cursor
-
-        last_key = None
-        cursor = IntCursor(txn, self)
-        while True:
-            key, value = cursor.get(op=MDB_NEXT)
-            if key is not None and value is not None:
-                last_key = key
-                if key < key_:
-                    yield key, value
-                else:
-                    break
-            elif key is None and value is not None:
-                yield last_key, value
-            else:
-                break
-        cursor.close()
-
-    def get_le(self, Txn txn, key_):
+    def get_le(self, Txn txn, long key_):
         for key, value in self.get_lt(txn, key_):
             yield key, value
         for key, value in self.get_eq(txn, key_):
             yield key, value
 
 
-    def get_gt(self, Txn txn, key_):
-        cdef IntCursor cursor
+    def get_gt(self, Txn txn, long key):
+        cdef cmdb.MDB_cursor *cursor
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef char *value_
+        cdef long key_
 
-        last_key = None
-        cursor = IntCursor(txn, self)
-        key, value = cursor.get(key_, op=MDB_SET_RANGE)
-        if key is not None:
-            if key == key_:
-                # if the key is present, skip all the possible dups
-                _, _ = cursor.get(key_, op=MDB_LAST_DUP)
-            while True:
-                key, value = cursor.get(op=MDB_NEXT)
-                if key is not None and value is not None:
-                    last_key = key
-                    yield key, value
-                elif key is None and value is not None:
-                    yield last_key, value
-                else:
-                    break
-        cursor.close()
+        err = cmdb.mdb_cursor_open(txn.txn, self.dbi, &cursor)
+        if err:
+            raise Exception("Error creating Cursor: %s"
+                    % cmdb.mdb_strerror(err))
+        key_ = key
+        api_key.mv_size = sizeof(long)
+        api_key.mv_data = <void*>&key_
+        api_value.mv_size = 0
+        api_value.mv_data = NULL
 
-    def get_ge(self, Txn txn, key_):
+        try:
+            if not cmdb.mdb_cursor_get(cursor, &api_key,
+                                    &api_value, MDB_SET_RANGE):
+                key_ = (<long*>api_key.mv_data)[0]
+                if key == key_:
+                    # if the key is present, skip all the possible dups
+                    api_value.mv_size = 0
+                    api_value.mv_data = NULL
+                    cmdb.mdb_cursor_get(cursor, &api_key,
+                                        &api_value, MDB_LAST_DUP)
+                while not cmdb.mdb_cursor_get(cursor, &api_key,
+                                                &api_value, MDB_NEXT):
+                    value_ = <char*>api_value.mv_data
+                    key_ = (<long*>api_key.mv_data)[0]
+                    yield key_, value_[:api_value.mv_size-1]
+            else:
+                yield None, None
+        finally:
+            cmdb.mdb_cursor_close(cursor)
+
+    def get_ge(self, Txn txn, long key_):
         for key, value in self.get_eq(txn, key_):
             yield key, value
         for key, value in self.get_gt(txn, key_):
             yield key, value
 
-    def get_range(self, Txn txn, key_begin, key_end):
+    def get_range(self, Txn txn, long key_begin, long key_end):
         if key_begin > key_end:
             raise KeyError("Keys are out of order")
-        for key, value in self.get_eq(txn, key_begin):
+        for key, value in self.get_ge(txn, key_begin):
+            if key <= key_end:
+                yield key, value
+            else:
+                break
+
+
+cdef class IntIntDB(DB):
+    def __init__(self, Env env, Txn txn, name=None,
+                 unsigned int flags=MDB_DUPSORT | MDB_CREATE):
+        flags |= (MDB_INTEGERKEY | MDB_INTEGERDUP | MDB_DUPFIXED)
+        super(IntIntDB, self).__init__(env, txn, name, flags)
+
+    def get(self, Txn txn, long key):
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef long ikey, value
+
+        ikey = key
+        api_key.mv_size = sizeof(long)
+        api_key.mv_data = <void *>&ikey
+
+        err = cmdb.mdb_get(txn.txn, self.dbi, &api_key, &api_value)
+        if err == cmdb.MDB_NOTFOUND:
+            raise KeyNotFoundError("Error getting data: %s"
+                                   % cmdb.mdb_strerror(err))
+        elif err:
+            raise Exception("Error getting data: %s" % cmdb.mdb_strerror(err))
+        value = (<long*>api_value.mv_data)[0]
+        return value
+
+    def put(self, Txn txn, long key, long value, unsigned int flags=0):
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef long ikey
+
+        ikey = key
+        api_key.mv_size = sizeof(long)
+        api_key.mv_data = <void *>&ikey
+        api_value.mv_size = sizeof(long)
+        api_value.mv_data = <void *>&value
+
+        err = cmdb.mdb_put(txn.txn, self.dbi, &api_key, &api_value, flags)
+        if err == cmdb.MDB_MAP_FULL:
+            raise MapFullError("Error putting data: %s"
+                               % cmdb.mdb_strerror(err))
+        elif err == cmdb.MDB_TXN_FULL:
+            raise TxnFullError("Error putting data: %s"
+                               % cmdb.mdb_strerror(err))
+        elif err == cmdb.MDB_KEYEXIST:
+            raise KeyExistError("Error putting data: %s"
+                                % cmdb.mdb_strerror(err))
+        elif err:
+            raise Exception("Error putting data: %s" % cmdb.mdb_strerror(err))
+
+
+    def delete(self, Txn txn, long key, value=None):
+        """Delete key/value from MDB
+
+        If value is not specified, delete all values with this key. Otherwise,
+        delete the specified key/value.
+        """
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef long ikey, value_
+
+        ikey = key
+        api_key.mv_size = sizeof(long)
+        api_key.mv_data = <void *>&ikey
+        if value:
+            value_ = value
+            api_value.mv_size = sizeof(long)
+            api_value.mv_data = <void *>&value_
+            err = cmdb.mdb_del(txn.txn, self.dbi, &api_key, &api_value)
+            if err:
+                raise Exception("Error deleting data: %s"
+                                % cmdb.mdb_strerror(err))
+        else:
+            err = cmdb.mdb_del(txn.txn, self.dbi, &api_key, NULL)
+            if err:
+                raise Exception("Error deleting data: %s"
+                                % cmdb.mdb_strerror(err))
+
+    def items(self, Txn txn):
+        '''Return all the unique key values
+        '''
+        cdef cmdb.MDB_cursor *cursor
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef long key, value
+
+        err = cmdb.mdb_cursor_open(txn.txn, self.dbi, &cursor)
+        if err:
+            raise Exception("Error creating Cursor: %s"
+                    % cmdb.mdb_strerror(err))
+        api_key.mv_size = 0
+        api_key.mv_data = NULL
+        api_value.mv_size = 0
+        api_value.mv_data = NULL
+
+        try:
+            while not cmdb.mdb_cursor_get(cursor, &api_key,
+                                          &api_value, MDB_NEXT_NODUP):
+                value = (<long*>api_value.mv_data)[0]
+                key = (<long*>api_key.mv_data)[0]
+                yield key, value
+        finally:
+            cmdb.mdb_cursor_close(cursor)
+
+    def dup_items(self, Txn txn):
+        '''Return all the key values
+        '''
+        cdef cmdb.MDB_cursor *cursor
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef long key, value
+
+        err = cmdb.mdb_cursor_open(txn.txn, self.dbi, &cursor)
+        if err:
+            raise Exception("Error creating Cursor: %s"
+                    % cmdb.mdb_strerror(err))
+        api_key.mv_size = 0
+        api_key.mv_data = NULL
+        api_value.mv_size = 0
+        api_value.mv_data = NULL
+
+        try:
+            while not cmdb.mdb_cursor_get(cursor, &api_key,
+                                          &api_value, MDB_NEXT):
+                key = (<long*>api_key.mv_data)[0]
+                value = (<long*>api_value.mv_data)[0]
+                yield key, value
+        finally:
+            cmdb.mdb_cursor_close(cursor)
+
+    def get_dup(self, Txn txn, long key):
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef long ikey, value
+        cdef cmdb.MDB_cursor *cursor
+
+        err = cmdb.mdb_cursor_open(txn.txn, self.dbi, &cursor)
+        if err:
+            raise Exception("Error creating cursor: %s"
+                    % cmdb.mdb_strerror(err))
+        ikey = key
+        api_key.mv_size = sizeof(long)
+        api_key.mv_data = <void *>&ikey
+
+        try:
+            if not cmdb.mdb_cursor_get(cursor, &api_key, &api_value, MDB_SET):
+                value = (<long *>api_value.mv_data)[0]
+                yield value
+                while True:
+                    if not cmdb.mdb_cursor_get(cursor, &api_key,
+                                               &api_value, MDB_NEXT_DUP):
+                        value = (<long *>api_value.mv_data)[0]
+                        yield value
+                    else:
+                        break
+        finally:
+            cmdb.mdb_cursor_close(cursor)
+
+    def get_lt(self, Txn txn, long key):
+        cdef cmdb.MDB_cursor *cursor
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef long key_, value
+
+        err = cmdb.mdb_cursor_open(txn.txn, self.dbi, &cursor)
+        if err:
+            raise Exception("Error creating Cursor: %s"
+                    % cmdb.mdb_strerror(err))
+        api_key.mv_size = sizeof(long)
+        api_key.mv_data = <void*>&key_
+        api_value.mv_size = 0
+        api_value.mv_data = NULL
+
+        try:
+            while not cmdb.mdb_cursor_get(cursor, &api_key,
+                                          &api_value, MDB_NEXT):
+                value = (<long *>api_value.mv_data)[0]
+                key_ = (<long*>api_key.mv_data)[0]
+                if key_ < key:
+                    yield key_, value
+                else:
+                    break
+        finally:
+            cmdb.mdb_cursor_close(cursor)
+
+    def get_le(self, Txn txn, long key_):
+        for key, value in self.get_lt(txn, key_):
             yield key, value
-        for key, value in self.get_gt(txn, key_begin):
+        for key, value in self.get_eq(txn, key_):
+            yield key, value
+
+
+    def get_gt(self, Txn txn, long key):
+        cdef cmdb.MDB_cursor *cursor
+        cdef cmdb.MDB_val api_key
+        cdef cmdb.MDB_val api_value
+        cdef long key_, value
+
+        err = cmdb.mdb_cursor_open(txn.txn, self.dbi, &cursor)
+        if err:
+            raise Exception("Error creating Cursor: %s"
+                    % cmdb.mdb_strerror(err))
+        key_ = key
+        api_key.mv_size = sizeof(long)
+        api_key.mv_data = <void*>&key_
+        api_value.mv_size = 0
+        api_value.mv_data = NULL
+
+        try:
+            if not cmdb.mdb_cursor_get(cursor, &api_key,
+                                    &api_value, MDB_SET_RANGE):
+                key_ = (<long*>api_key.mv_data)[0]
+                if key == key_:
+                    # if the key is present, skip all the possible dups
+                    api_value.mv_size = 0
+                    api_value.mv_data = NULL
+                    cmdb.mdb_cursor_get(cursor, &api_key,
+                                        &api_value, MDB_LAST_DUP)
+                while not cmdb.mdb_cursor_get(cursor, &api_key,
+                                                &api_value, MDB_NEXT):
+                    key_ = (<long*>api_key.mv_data)[0]
+                    value = (<long *>api_value.mv_data)[0]
+                    yield key_, value
+            else:
+                yield None, None
+        finally:
+            cmdb.mdb_cursor_close(cursor)
+
+    def get_ge(self, Txn txn, long key_):
+        for key, value in self.get_eq(txn, key_):
+            yield key, value
+        for key, value in self.get_gt(txn, key_):
+            yield key, value
+
+    def get_range(self, Txn txn, long key_begin, long key_end):
+        if key_begin > key_end:
+            raise KeyError("Keys are out of order")
+        for key, value in self.get_ge(txn, key_begin):
             if key <= key_end:
                 yield key, value
             else:
@@ -631,12 +1084,8 @@ cdef class Cursor:
             if key is not None:
                 return key, value_[:api_value.mv_size-1]
             else:
-                if api_key.mv_data == NULL and api_key.mv_size == 0:
-                    # This case is for dup key/values, won't return a key
-                    return None, value_[:api_value.mv_size-1]
-                else:
-                    key_ = <char*>api_key.mv_data
-                    return key_[:api_key.mv_size-1], value_[:api_value.mv_size-1]
+                key_ = <char*>api_key.mv_data
+                return key_[:api_key.mv_size-1], value_[:api_value.mv_size-1]
         else:
             return None, None
 
@@ -713,12 +1162,8 @@ cdef class IntCursor(Cursor):
             if key is not None:
                 return key, value_[:api_value.mv_size-1]
             else:
-                if api_key.mv_data == NULL and api_key.mv_size == 0:
-                    # This case is for dup key/values, won't return a key
-                    return None, value_[:api_value.mv_size-1]
-                else:
-                    return long((<long*>api_key.mv_data)[0]),\
-                           value_[:api_value.mv_size-1]
+                return long((<long*>api_key.mv_data)[0]),\
+                        value_[:api_value.mv_size-1]
         else:
             return None, None
 
@@ -749,11 +1194,36 @@ DEFAULT_DB_NAME = '_default'
 IDENTITY_FN = lambda val: val
 
 
-def mdb_write_handle(path, size, db_name=DEFAULT_DB_NAME, dup=True, int_key=False):
+def mdb_write_handle(path,                          # the path of mdb
+                     size,                          # the size of mdb in byte
+                     db_name=DEFAULT_DB_NAME,       # the name of database
+                     dup=True,                      # duplicate values
+                     int_key=False,                 # integer key
+                     int_val=False                  # integer value
+                     ):
     env = Env(path, flags=MDB_NOSYNC | MDB_WRITEMAP, mapsize=size)
     txn = env.begin_txn()
-    flags = MDB_CREATE | MDB_DUPSORT if dup else MDB_CREATE
-    flags = flags | MDB_INTEGERKEY if int_key else flags
+    flags = MDB_CREATE
+    flags |= MDB_DUPSORT if dup else 0
+    flags |= MDB_INTEGERKEY if int_key else 0
+    flags |= MDB_INTEGERDUP if int_val else 0
+    db = env.open_db(txn, name=db_name, flags=flags)
+
+    return env, txn, db
+
+
+def mdb_read_handle(path,                           # the path of mdb
+                    db_name=DEFAULT_DB_NAME,        # the name of database
+                    dup=True,                       # duplicate values
+                    int_key=False,                  # integer key
+                    int_val=False                   # integer value
+                    ):
+    env = Env(path, flags=MDB_RDONLY)
+    txn = env.begin_txn(flags=MDB_RDONLY)
+    flags = 0
+    flags |= MDB_DUPSORT if dup else 0
+    flags |= MDB_INTEGERKEY if int_key else 0
+    flags |= MDB_INTEGERDUP if int_val else 0
     db = env.open_db(txn, name=db_name, flags=flags)
 
     return env, txn, db
@@ -769,14 +1239,15 @@ class DupReader(object):
     except that it remains database handles open. Reader Will close that
     mannually.
     '''
-    def __init__(self, path, db_name=DEFAULT_DB_NAME, int_key=False,
-                 decode_fn=None):
+    def __init__(self, path, db_name=DEFAULT_DB_NAME,
+                 int_key=False, int_val=False, decode_fn=None):
         self.path = path
         self.db_name = db_name
         self.env = Env(path, flags=MDB_RDONLY)
         txn = self.env.begin_txn(flags=MDB_RDONLY)
         flags = MDB_DUPSORT
-        flags = MDB_INTEGERKEY | flags if int_key else flags
+        flags |= MDB_INTEGERKEY if int_key else 0
+        flags |= MDB_INTEGERDUP if int_val else 0
         self.db = self.env.open_db(txn, name=db_name, flags=flags)
         self.decode_fn = decode_fn or IDENTITY_FN
         txn.commit()
@@ -829,12 +1300,14 @@ class DupReader(object):
 
 class Reader(object):
     def __init__(self, path, db_name=DEFAULT_DB_NAME,
-                 int_key=False, decode_fn=None):
+                 int_key=False, int_val=False, decode_fn=None):
         self.path = path
         self.db_name = db_name
         self.env = Env(path, flags=MDB_RDONLY)
         txn = self.env.begin_txn(flags=MDB_RDONLY)
-        flags = MDB_INTEGERKEY if int_key else 0
+        flags= 0
+        flags |= MDB_INTEGERKEY if int_key else 0
+        flags |= MDB_INTEGERDUP if int_val else 0
         self.db = self.env.open_db(txn, name=db_name, flags=flags)
         self.decode_fn = decode_fn or IDENTITY_FN
         txn.commit()
@@ -878,15 +1351,17 @@ class Reader(object):
 
 class Writer(object):
     def __init__(self, path, mapsize=10*MB, db_name=DEFAULT_DB_NAME,
-                 dup=False, int_key=False,
+                 dup=False, int_key=False, int_val=False,
                  encode_fn=None, drop_on_mput=False):
         # Check directory exists
         self.db_name = db_name
         self._check_mdb_dir(path)
         self.env = Env(path, flags=MDB_NOSYNC | MDB_WRITEMAP, mapsize=mapsize)
         txn = self.env.begin_txn()
-        flags = MDB_CREATE | MDB_DUPSORT if dup else MDB_CREATE
-        flags = flags | MDB_INTEGERKEY if int_key else flags
+        flags = MDB_CREATE
+        flags |= MDB_DUPSORT if dup else 0
+        flags |= MDB_INTEGERKEY if int_key else 0
+        flags |= MDB_INTEGERDUP if int_val else 0
         self.flags = flags
         self.db = self.env.open_db(txn, name=db_name, flags=flags)
         self.encode_fn = encode_fn or IDENTITY_FN
