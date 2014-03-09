@@ -6,6 +6,7 @@ pymdb-lightning
 
 A much more up-to-date, bug freer, featureful version of this API is over on the Hustle project: https://github.com/chango/hustle.
 
+===
 
 Python interface to OpenLDAP MDB (aka. lightning db) key/value store.
 
